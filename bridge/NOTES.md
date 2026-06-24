@@ -156,10 +156,15 @@ Flow for a gated PreToolUse:
 5. The hook prints `permissionDecision` allow/deny; the extension honors it.
 
 Never deadlocks: device disconnected / another prompt already in flight / no
-press within `approve_timeout` (30s) → daemon replies `"ask"`, the hook prints
-nothing, and the normal VS Code prompt takes over. Only `button_approval_tools`
-(default Bash/Write/Edit/MultiEdit/NotebookEdit) are gated; other tools pass
-through. One prompt at a time (the firmware shows one).
+press within `approve_timeout` (300s = 5 min) → daemon replies `"ask"`, the hook
+prints nothing, and the normal VS Code prompt takes over. Only
+`button_approval_tools` (default Bash/Write/Edit/MultiEdit/NotebookEdit) are
+gated; other tools pass through. One prompt at a time (the firmware shows one).
+
+Gotcha: Claude Code kills hooks at **60s by default**, which would cut the wait
+short — so the PreToolUse hook's `timeout` is set to **360s** in settings.json
+(and by `wire_hooks.py`). It must stay > `approve_timeout`. The hook's own socket
+read timeout is `approve_timeout + 5`.
 
 Trade-off: with it on, EVERY gated tool waits for a button press — that's the
 full "pet approves your work" experience, but it's why it's opt-in.

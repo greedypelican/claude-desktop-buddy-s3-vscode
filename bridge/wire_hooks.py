@@ -34,6 +34,10 @@ EVENTS = [
 
 MANAGED = ("buddy_hook.py", "log_event.py")
 
+# PreToolUse may block on a device button (button approval). Claude Code kills
+# hooks at 60s by default, so give it room beyond approve_timeout (300s).
+PRETOOLUSE_TIMEOUT = 360
+
 
 def cmd_for(target):
     if target == "project":
@@ -86,7 +90,10 @@ def main():
     for event, needs_matcher in EVENTS:
         groups = strip_managed(hooks.get(event, []))
         if not remove:
-            entry = {"hooks": [{"type": "command", "command": cmd}]}
+            hook_cmd = {"type": "command", "command": cmd}
+            if event == "PreToolUse":
+                hook_cmd["timeout"] = PRETOOLUSE_TIMEOUT
+            entry = {"hooks": [hook_cmd]}
             if needs_matcher:
                 entry = {"matcher": "*", **entry}
             groups.append(entry)

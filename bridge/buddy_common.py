@@ -48,7 +48,11 @@ DEFAULTS = {
     # approve_timeout, it falls back to the normal VS Code prompt — never hangs.
     "button_approval": False,
     "button_approval_tools": ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"],
-    "approve_timeout": 30.0,
+    # How long the device waits for an A/B press before falling back to the VS
+    # Code prompt. NOTE: the PreToolUse hook's own `timeout` in settings.json
+    # must exceed this (Claude Code kills hooks at 60s by default), or the wait
+    # is cut short — wire_hooks.py / the committed settings.json set it to 360s.
+    "approve_timeout": 300.0,
 }
 
 

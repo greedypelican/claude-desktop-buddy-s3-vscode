@@ -129,12 +129,15 @@ in VS Code. Off by default. Enable in `~/.claude-buddy/config.json`:
 
 Takes effect on the next tool call (no restart needed). When on, each gated tool
 shows an approval screen on the buddy and **blocks** until you press A/B. If the
-device is disconnected, busy with another prompt, or you don't press within 30 s,
-it falls back to the normal VS Code prompt — it never hangs.
+device is disconnected, busy with another prompt, or you don't press within
+5 minutes, it falls back to the normal VS Code prompt — it never hangs.
 
 - `button_approval_tools` — which tools are gated (default
   `["Bash","Write","Edit","MultiEdit","NotebookEdit"]`; reads etc. pass through).
-- `approve_timeout` — seconds to wait for a button before falling back (default 30).
+- `approve_timeout` — seconds to wait for a button before falling back (default
+  300 = 5 min). If you raise it past ~355, also bump the PreToolUse hook
+  `timeout` in settings.json (Claude Code kills hooks at 60s by default; ours is
+  set to 360).
 
 Heads-up: every gated tool waits for a press — that's the point, but it's why
 it's opt-in.
