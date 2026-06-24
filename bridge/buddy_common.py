@@ -20,10 +20,12 @@ DEFAULTS = {
     "name_prefix": "Claude",
     # Owner first name shown on the device. "" → leave the device's stored name.
     "owner": "",
-    # Seconds a session can be quiet before we drop it from "busy" back to idle.
-    # Stop is unreliable in the VS Code extension, so this timeout is the real
-    # idle trigger (see NOTES.md).
-    "idle_timeout": 12.0,
+    # Safety-net only: a turn is busy from UserPromptSubmit until Stop, and Stop
+    # fires reliably, so this just clears a stuck "busy" if a Stop is ever
+    # missed. It must be LONGER than the longest gap *within* a turn (Claude can
+    # generate text / think for tens of seconds with no hook), or the buddy
+    # falls back to idle mid-work. See NOTES.md.
+    "idle_timeout": 600.0,
     # Seconds a PreToolUse may sit without its PostToolUse before we treat the
     # tool as blocked on the approval prompt → attention. The Pre→Post gap is
     # how we detect "waiting for approval" without the Notification hook.

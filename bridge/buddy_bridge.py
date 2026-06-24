@@ -102,11 +102,17 @@ def apply_event(state, ev):
         uid = ev.get("uid")
         if uid:
             state["pending"].pop(uid, None)
-    elif name in ("Stop", "SubagentStop"):
+    elif name == "Stop":
+        # Turn finished — back to idle.
         s = S.setdefault(sid, {})
         s["busy"] = False
         s["last"] = now
         clear_pending(state, sid)
+    elif name == "SubagentStop":
+        # A subagent finished but the main turn is still running — stay busy.
+        s = S.setdefault(sid, {})
+        s["busy"] = True
+        s["last"] = now
     elif name == "Notification":
         # Doesn't fire in the VS Code extension, but does in the CLI — treat it
         # as a generic "needs you" attention nudge when present.

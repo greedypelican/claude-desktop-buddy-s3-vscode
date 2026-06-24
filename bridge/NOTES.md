@@ -68,11 +68,24 @@ also cleared on the session's next prompt/Stop and force-expired after
 
 ```
 SessionStart                              → idle    (connected)
-UserPromptSubmit / Pre / PostToolUse      → busy    (running > 0)
+UserPromptSubmit / Pre / PostToolUse      → busy    (stays busy for the WHOLE turn)
+SubagentStop                              → busy    (subagent done, main turn continues)
 PreToolUse without PostToolUse > 1.5s     → attention (waiting > 0, LED blinks)
-no events + nothing pending > 12s         → idle    (idle_timeout; Stop unreliable)
+Stop                                      → idle    (turn ended — the normal idle trigger)
+no events > idle_timeout (600s/10min)     → idle    (SAFETY NET only, if a Stop is missed)
 SessionEnd (last session gone)            → sleep   (total == 0)
 ```
+
+A turn is busy from UserPromptSubmit until Stop. Crucially the idle_timeout is a
+long safety net, NOT the normal idle trigger — Claude can generate text / think
+for tens of seconds with no hook event, so a short timeout (we had 12s) drops the
+buddy to idle mid-work. Stop fires reliably, so it ends the turn promptly; the
+600s (10 min) timeout only matters if a Stop is somehow missed.
+
+Known limitation: a long *auto-approved* tool (e.g. a 20s build) also opens a
+Pre→Post gap, so it reads as attention, not busy — indistinguishable from a real
+approval wait without the Notification hook. Raise `approve_wait` if that flicker
+bothers you (at the cost of slower real-approval detection).
 
 Emitted as the heartbeat snapshot `{total, running, waiting, msg}`.
 
