@@ -1,0 +1,4 @@
+# Bridge daemon dependencies (installed into bridge/.venv by install.sh).
+# bleak = cross-platform BLE central (CoreBluetooth on macOS, BlueZ on Linux,
+# WinRT on Windows). The hook client uses only the stdlib — nothing here.
+bleak>=0.22

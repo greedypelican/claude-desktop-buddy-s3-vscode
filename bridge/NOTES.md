@@ -1,0 +1,147 @@
+# Bridge design notes (the "why")
+
+Living design memory for `bridge/` — kept in the repo so it travels to every
+clone. README.md is how to *use* it; this is why it is *built this way*.
+
+## Problem
+
+The buddy firmware is a BLE peripheral speaking the Hardware Buddy wire protocol
+(Nordic UART Service + newline JSON; see `../REFERENCE.md`). The **desktop app**
+(macOS/Windows) is the BLE *central* that feeds it session state. The **VS Code
+Claude Code extension has no such bridge** — nothing plays central. So the buddy
+goes dark when you work in the extension.
+
+This bridge is that missing central + an event translator, driven by Claude Code
+**hooks** instead of the desktop app's session manager. **The firmware is not
+modified.**
+
+```
+Claude Code (VS Code)
+   │  hooks (SessionStart / UserPromptSubmit / Pre|PostToolUse / Stop …)
+   ▼
+buddy_hook.py  (short-lived, stdlib only)
+   │  unix socket  (~/.claude-buddy/buddy.sock)
+   ▼
+buddy_bridge.py  (long-lived daemon, venv + bleak = BLE central)
+   │  Nordic UART JSON
+   ▼
+M5StickS3  (unchanged firmware)
+```
+
+Why two processes: hooks are short-lived (one per event) and can't hold a BLE
+connection. The daemon is long-lived and owns the link; hooks just post events.
+
+## Event findings — measured live inside the VS Code extension (2026-06-24)
+
+Captured with `log_event.py` wired to every hook (see git history). Hooks load
+at **session start and do NOT hot-reload** — you must restart Claude Code after
+changing `.claude/settings.json`.
+
+| Hook event       | Fires in extension? | Useful payload |
+| ---------------- | ------------------- | -------------- |
+| SessionStart     | ✅ (`startup` **and** `resume` both fire on a restart) | `source` |
+| SessionEnd       | ✅                  | `reason` |
+| UserPromptSubmit | ✅                  | `prompt`, `permission_mode` |
+| PreToolUse       | ✅                  | `tool_name`, `tool_input`, `tool_use_id` |
+| PostToolUse      | ✅                  | + `tool_response`, `duration_ms` |
+| **Notification** | ❌ **never fires**  | — |
+| Stop / SubagentStop | ❓ unconfirmed (turns kept getting new input, never cleanly stopped) | — |
+
+The big one: **Notification does not fire in the extension.** Real approval
+prompts appeared (the "Allow this bash command?" webview, 15s+ gaps) yet zero
+Notification events — the extension renders its own permission UI and skips the
+hook. So "waiting for approval" can't be read from Notification.
+
+## How we detect attention without Notification
+
+The **Pre→Post timing gap.** A `PreToolUse(tool_use_id)` with no matching
+`PostToolUse(same id)` after `approve_wait` (1.5s) means the tool is blocked on
+the approval webview → **attention**. `PostToolUse(id)` clears it → back to busy.
+`tool_use_id` pairs Pre↔Post exactly. Bonus over Notification: we know the tool
+name + command, so the device can show *what* is waiting.
+
+Gotcha handled: a **denied** tool never emits PostToolUse, so a pending entry is
+also cleared on the session's next prompt/Stop and force-expired after
+`pending_ttl` (180s) — otherwise attention would stick forever.
+
+## State mapping (display-only MVP)
+
+```
+SessionStart                              → idle    (connected)
+UserPromptSubmit / Pre / PostToolUse      → busy    (running > 0)
+PreToolUse without PostToolUse > 1.5s     → attention (waiting > 0, LED blinks)
+no events + nothing pending > 12s         → idle    (idle_timeout; Stop unreliable)
+SessionEnd (last session gone)            → sleep   (total == 0)
+```
+
+Emitted as the heartbeat snapshot `{total, running, waiting, msg}`.
+
+## Firmware display quirks (measured against the real device, `../src/main.cpp`)
+
+`derive()` (main.cpp ~480) is blunter than the README's "seven states" implies:
+
+```c
+if (!connected)            return P_IDLE;      // not P_SLEEP
+if (sessionsWaiting > 0)   return P_ATTENTION; // ← our attention works
+if (recentlyCompleted)     return P_CELEBRATE;
+if (sessionsRunning >= 3)  return P_BUSY;       // ← THREE+, not >0
+return P_IDLE;
+```
+
+- **busy needs `running >= 3`.** A single Claude Code session (running=1) shows
+  as **idle**, same as the desktop app. Optional `busy_boost` in config reports
+  running=3 whenever ≥1 session generates, so the buddy looks awake while you
+  work (waiting/attention still wins on-device).
+- **The "zzz" sleep look is the idle/resting ambient**, not a bug and not a
+  disconnect (disconnect → P_IDLE, never P_SLEEP). On the clock screen the device
+  cycles idle/sleep/etc. by **time of day** (main.cpp ~1175: 1–7am & late night &
+  weekends → mostly P_SLEEP). So if it sleeps at the wrong time, suspect the RTC —
+  we send `{"time":[epoch, tz_offset_sec]}` on connect (parsed in data.h ~77).
+- Snapshot keys the firmware actually reads: `total`, `running`, `waiting`, `msg`,
+  `time`, plus the `cmd`/owner/char-push set. Others are ignored.
+
+## BLE security (from `../src/ble_bridge.cpp`)
+
+The firmware requires **LE Secure Connections + MITM passkey bonding**; every
+characteristic is encrypted-only (`ESP_LE_AUTH_REQ_SC_MITM_BOND`, DisplayOnly).
+So the central MUST bond. On macOS, CoreBluetooth (via bleak) triggers OS pairing
+the first time we touch an encrypted characteristic — `start_notify` on TX — and
+the OS shows a dialog for the 6-digit passkey displayed on the stick. The bond is
+stored by the OS keyed to the device, so it's shared with the desktop app and
+reconnects don't re-prompt. MTU negotiates ~185 on macOS; we chunk writes to 180.
+
+One central at a time: disconnect the desktop Hardware Buddy before using this.
+
+## Portability decisions (runs/install on any machine)
+
+- No hardcoded paths. Scripts resolve themselves from `__file__`; project hooks
+  use `$CLAUDE_PROJECT_DIR`; `wire_hooks.py user` computes an absolute path at
+  install time on each machine.
+- Runtime state in `~/.claude-buddy/` (socket, log, optional `config.json`) —
+  per-user, deterministic, short enough for an AF_UNIX path on macOS.
+- Hook client is stdlib-only (no venv needed to *report* events); only the daemon
+  needs bleak, in `bridge/.venv`. The hook auto-spawns the daemon from that venv.
+- Targets macOS + Linux (AF_UNIX). Windows is future work (different IPC + pairing).
+
+## FUTURE — button approval (A=approve / B=deny on the device)
+
+Deliberately seamed in, not built yet (MVP is display-only):
+
+- Daemon already subscribes to the device TX channel (`on_notify`) and the wire
+  protocol defines `{"cmd":"permission","id":...,"decision":"once"|"deny"}`.
+- Plan: a `buddy_hook.py --approve` mode on **PreToolUse** that keeps the socket
+  open, asks the daemon to push the prompt + await a button, then prints Claude
+  Code's `hookSpecificOutput.permissionDecision` (allow/deny) to stdout.
+- OPEN RISK: a PreToolUse hook returning a decision must actually gate the tool
+  in the extension. Unconfirmed — the extension owns its permission webview, so
+  this may only work in the CLI. Test before committing to it. Display-only
+  attention already delivers the original goal (visual alert instead of sound).
+
+## File map
+
+- `buddy_common.py` — paths + config (stdlib; imported by both sides)
+- `buddy_bridge.py` — the daemon (bleak central, state machine, snapshots)
+- `buddy_hook.py`   — hook client (stdlib; posts events, spawns daemon)
+- `wire_hooks.py`   — install/remove hooks in project or user settings.json
+- `install.sh`      — venv + bleak + runtime dir
+- `log_event.py`    — diagnostic-only event logger (not wired by default)
