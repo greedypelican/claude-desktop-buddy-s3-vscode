@@ -169,6 +169,48 @@ read timeout is `approve_timeout + 5`.
 Trade-off: with it on, EVERY gated tool waits for a button press — that's the
 full "pet approves your work" experience, but it's why it's opt-in.
 
+### Modes (config `button_approval`)
+
+- `true` — device decides (the flow above). VS Code shows no prompt.
+- `"alert"` — device **alerts**, VS Code decides. The hook sends a non-blocking
+  `AlertPrompt` event (returns no decision, so the normal VS Code prompt appears),
+  the snapshot carries `prompt.alert:true` so the firmware shows `→ approve in
+  editor` and ignores its A/B buttons, and the daemon clears `active_prompt` on
+  the matching PostToolUse / Stop / SessionEnd / `approve_timeout`. Both prompts
+  appear together — but only for tools VS Code actually prompts on (it may
+  auto-approve some, in which case neither shows; correct — nothing to approve).
+- `false` — display-only.
+
+`prompt.alert` is the only firmware change for this (data.h parses it;
+drawApproval + the A/B handlers in main.cpp gate on `promptAlert`). The Pre→Post
+attention heuristic still runs underneath in every mode.
+
+### Alert types & sounds
+
+Three notifications, each a distinct chime on the device speaker:
+
+| Type | Trigger | Note | BPM | Repeats | Vol |
+| --- | --- | --- | --- | --- | --- |
+| approve | a gated tool needs permission | C6 (1046.50) | 400 | 2 | 210 |
+| question | Claude calls `AskUserQuestion` | G6 (1567.98) | 300 | 3 | 160 |
+| complete | the turn finished (`Stop`) | B6 (1975.53) | 200 | 4 | 140 |
+
+The daemon enqueues a name (`state["beep_queue"]`) and the BLE loop sends
+`{"cmd":"beep","name":…}`; the firmware's `buddyRequestBeep()` maps it to a
+**non-blocking** sequence via `beepSeq(freq, dur, bpm, count, vol)`. Frequencies
+are float (exact pitches); BPM is onset-to-onset (`60000/bpm` ms); `vol` sets the
+master volume (0-255) and persists to later button beeps. To retune, edit
+`buddyRequestBeep()` in main.cpp and reflash.
+
+Latency: question + complete fire immediately; approve waits `approve_wait`
+(default 0 → instant, chimes even on auto-approved tools; raise to filter them).
+The daemon loop ticks at 0.1s.
+
+**FIRMWARE GOTCHA:** the beep handler in `data.h` `_applyJson` MUST come *before*
+`xferCommand()` — xferCommand returns true for ANY unknown cmd when no transfer
+is active (xfer.h ~188), so it silently swallows `{"cmd":"beep"}` otherwise. This
+cost an hour of "why is there no sound" (the screen worked, the cmd was eaten).
+
 ## File map
 
 - `buddy_common.py` — paths + config (stdlib; imported by both sides)

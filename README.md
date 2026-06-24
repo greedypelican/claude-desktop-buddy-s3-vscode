@@ -102,46 +102,66 @@ device.
 
 ## Configure
 
-Optional `~/.claude-buddy/config.json`:
+Settings live in **`~/.claude-buddy/config.json`** (any missing key uses its
+default below). The daemon reads it at **startup**, so after editing, restart it:
+`pkill -f buddy_bridge.py` then relaunch (or just start a new Claude Code session
+— the hook respawns it). Example:
 
 ```json
-{ "owner": "Felix" }
+{
+  "owner": "Felix",
+  "busy_boost": true,
+  "button_approval": "alert",
+  "approve_wait": 0
+}
 ```
 
-- `owner` — name shown on the device.
-- `busy_boost` — **on by default**: makes a single active session show as busy
-  (the firmware's own "busy" needs 3+ concurrent sessions). Set `false` for
-  desktop-app-faithful behavior.
-- Others: `name_prefix`, `idle_timeout`, `approve_wait` (see
-  [bridge/buddy_common.py](bridge/buddy_common.py)). Env `CLAUDE_BUDDY_OWNER` /
-  `CLAUDE_BUDDY_NAME` override.
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `owner` | `""` | Name shown on the device (empty = keep the device's stored name). |
+| `name_prefix` | `"Claude"` | BLE advertised-name prefix to scan for. |
+| `busy_boost` | `true` | Show a single active session as **busy** (the firmware's own "busy" needs 3+ concurrent sessions). `false` = desktop-app-faithful. |
+| `button_approval` | `"alert"` | `false` = display-only; `"alert"` = device chimes + shows the prompt, you decide in VS Code; `true` = device A/B decides. See [Button approval](#button-approval-optional). |
+| `button_approval_tools` | `["Bash","Write","Edit","MultiEdit","NotebookEdit"]` | Which tools trigger an approval alert/gate. |
+| `approve_wait` | `0` | Seconds to wait before an **approve** chime, to tell a genuine approval from an auto-approved tool. `0` = chime instantly on every gated tool (more false chimes); raise (e.g. `0.5`) to chime only when a tool actually waits. Questions always chime instantly. |
+| `approve_timeout` | `300` | `true` mode only: seconds to wait for an A/B press before falling back to the VS Code prompt. |
+| `idle_timeout` | `600` | Safety net: drop a stuck "busy" back to idle after this many quiet seconds (Stop normally handles it). |
+
+Env vars `CLAUDE_BUDDY_OWNER` / `CLAUDE_BUDDY_NAME` override `owner` / `name_prefix`.
+
+**Alert sounds** (musical note, beats-per-minute, repeats, volume) are set per
+type — `approve` / `question` / `complete` — in `buddyRequestBeep()` in
+[src/main.cpp](src/main.cpp). Editing those needs a firmware reflash.
 
 **Restart the bridge** after changing config (`pkill -f buddy_bridge.py`, or
 Ctrl+C the foreground run and re-launch).
 
 ## Button approval (optional)
 
-Approve or deny tool calls **on the device** — A = approve, B = deny — instead of
-in VS Code. Off by default. Enable in `~/.claude-buddy/config.json`:
+Set by `button_approval` in `~/.claude-buddy/config.json`:
 
-```json
-{ "button_approval": true }
-```
+- **`"alert"`** (default) — when a tool needs approval (or you're asked a
+  question) the buddy **chimes** and shows the prompt, but **you decide in VS
+  Code** (both appear together). The device shows `→ approve in editor` and its
+  A/B buttons do nothing. Non-blocking.
+- **`true`** — the device **decides**: A = approve, B = deny, returned to Claude
+  Code. VS Code shows no prompt in this mode. Blocks until you press (or it falls
+  back, see below).
+- **`false`** — display-only; the device just mirrors state, no chimes.
 
-Takes effect on the next tool call (no restart needed). When on, each gated tool
-shows an approval screen on the buddy and **blocks** until you press A/B. If the
-device is disconnected, busy with another prompt, or you don't press within
-5 minutes, it falls back to the normal VS Code prompt — it never hangs.
+Only tools in `button_approval_tools` are involved (default
+`["Bash","Write","Edit","MultiEdit","NotebookEdit"]`; reads etc. pass through).
+With the default `approve_wait` of `0`, a gated tool chimes the **approve** sound
+immediately — even ones VS Code auto-approves; raise `approve_wait` (e.g. `0.5`)
+to chime only when a tool genuinely waits. Questions always chime instantly.
+Switching `button_approval` takes effect on the next tool call; `approve_wait`
+and the other daemon settings need a daemon restart.
 
-- `button_approval_tools` — which tools are gated (default
-  `["Bash","Write","Edit","MultiEdit","NotebookEdit"]`; reads etc. pass through).
-- `approve_timeout` — seconds to wait for a button before falling back (default
-  300 = 5 min). If you raise it past ~355, also bump the PreToolUse hook
-  `timeout` in settings.json (Claude Code kills hooks at 60s by default; ours is
-  set to 360).
-
-Heads-up: every gated tool waits for a press — that's the point, but it's why
-it's opt-in.
+For **`true`** mode specifically: if the device is disconnected/busy or you don't
+press within `approve_timeout` (default 300 = 5 min), it falls back to the normal
+VS Code prompt — it never hangs. If you raise `approve_timeout` past ~355, also
+bump the PreToolUse hook `timeout` in settings.json (Claude Code kills hooks at
+60s by default; ours is set to 360).
 
 ## Use it in every project
 

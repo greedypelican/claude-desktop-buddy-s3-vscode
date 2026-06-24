@@ -31,7 +31,7 @@ inline int chipTempC() { return (int)temperatureRead(); }
 inline void getAccel(float* ax, float* ay, float* az) {
   M5.Imu.getAccel(ax, ay, az);
 }
-inline void beep(uint16_t freq, uint16_t durMs) {
+inline void beep(float freq, uint16_t durMs) {
   M5.Speaker.tone(freq, durMs);
 }
 inline void powerOff() { M5.Power.powerOff(); }

@@ -127,20 +127,8 @@ def emit_decision(decision):
     }}))
 
 
-def main():
-    ev = build_event(read_hook())
-    cfg = bc.load_config()
-
-    # Button approval: route a gated PreToolUse to the device and block for A/B.
-    if (ev.get("event") == "PreToolUse" and cfg.get("button_approval")
-            and ev.get("tool") in set(cfg.get("button_approval_tools") or [])):
-        decision = request_approval(ev, cfg)
-        if decision in ("allow", "deny"):
-            emit_decision(decision)
-        # "ask" → emit nothing → fall through to the normal VS Code prompt
-        sys.exit(0)
-
-    # Display-only path: fire-and-forget event report.
+def fire(ev):
+    """Fire-and-forget an event to the daemon; spawn it if it's not up."""
     try:
         send(ev)
     except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
@@ -150,6 +138,43 @@ def main():
             send(ev)
         except Exception:
             pass
+
+
+DEVICE_MODES = ("true", "device", "on", "1", "yes")
+
+
+def main():
+    ev = build_event(read_hook())
+    cfg = bc.load_config()
+    mode = str(cfg.get("button_approval") or "").lower()  # off | "alert" | device
+    enabled = mode == "alert" or mode in DEVICE_MODES
+    event = ev.get("event")
+    tool = ev.get("tool")
+    gated = tool in set(cfg.get("button_approval_tools") or [])
+
+    if event == "PreToolUse" and enabled:
+        if tool == "AskUserQuestion":
+            # Answer Question — Claude asks you to pick an option. Annotate so the
+            # daemon chimes (question) + shows it once it's actually waiting.
+            ev["kind"] = "question"
+            ev["alert"] = True
+        elif gated and mode in DEVICE_MODES:
+            # Device decides: block on A/B (then VS Code prompt on timeout).
+            decision = request_approval(ev, cfg)
+            if decision in ("allow", "deny"):
+                emit_decision(decision)
+            sys.exit(0)
+        elif gated:
+            # Approve Request (alert mode) — annotate; the daemon chimes only if
+            # the tool actually waits for approval (auto-approved → silent).
+            ev["kind"] = "approve"
+            ev["alert"] = True
+
+    # Task Complete — the turn finished. Chime on Stop (when alerts are enabled).
+    if event == "Stop" and enabled:
+        ev["beep"] = "complete"
+
+    fire(ev)
     sys.exit(0)
 
 

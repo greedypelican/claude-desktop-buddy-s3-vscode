@@ -108,8 +108,39 @@ static void wake() {
 }
 bool     responseSent = false;
 
-static void beep(uint16_t freq, uint16_t dur) {
+static void beep(float freq, uint16_t dur) {
   if (settings().sound) compat::beep(freq, dur);
+}
+
+// Non-blocking beep sequence: `count` tones of `dur` ms at `freq`, one per beat
+// at `bpm` (onset-to-onset = 60000/bpm ms), at master volume `vol` (0-255).
+// beepSeqTick() (called each loop) drives it, so multi-beep alerts don't block
+// the main loop. vol persists after the sequence (button beeps reuse it).
+static uint8_t  _beepLeft = 0;
+static float    _beepFreq = 0;
+static uint16_t _beepDur = 0, _beepPeriod = 0;  // _beepPeriod = onset-to-onset ms
+static uint32_t _beepNextMs = 0;
+static void beepSeq(float freq, uint16_t dur, uint16_t bpm, uint8_t count, uint8_t vol) {
+  M5.Speaker.setVolume(vol);
+  _beepFreq = freq; _beepDur = dur;
+  _beepPeriod = bpm ? (uint16_t)(60000.0f / bpm) : dur;
+  _beepLeft = count; _beepNextMs = 0;
+}
+static void beepSeqTick() {
+  if (!_beepLeft) return;
+  uint32_t now = millis();
+  if ((int32_t)(now - _beepNextMs) < 0) return;
+  beep(_beepFreq, _beepDur);
+  _beepNextMs = now + _beepPeriod;
+  _beepLeft--;
+}
+
+// Named alert patterns, triggered by the host: {"cmd":"beep","name":...}.
+void buddyRequestBeep(const char* name) {
+  if (!name) return;
+  if      (!strcmp(name, "approve"))  beepSeq(1046.50f, 80, 400, 2, 210); // C6, 400 BPM, x2, vol 210
+  else if (!strcmp(name, "question")) beepSeq(1567.98f, 90, 300, 3, 160); // G6, 300 BPM, x3, vol 160
+  else if (!strcmp(name, "complete")) beepSeq(1975.53f, 110, 200, 4, 140);// B6, 200 BPM, x4, vol 140
 }
 
 static void sendCmd(const char* json) {
@@ -747,7 +778,7 @@ static void drawApproval() {
   spr.setCursor(4, H - AREA + 4);
   uint32_t waited = (millis() - promptArrivedMs) / 1000;
   if (waited >= 10) spr.setTextColor(HOT, p.bg);
-  spr.printf("approve? %lus", (unsigned long)waited);
+  spr.printf("%s %lus", tama.promptAlert ? "pending" : "approve?", (unsigned long)waited);
 
   // Size 2 only if it fits one line (~10 chars at 12px on 135px screen)
   int toolLen = strlen(tama.promptTool);
@@ -771,6 +802,12 @@ static void drawApproval() {
     spr.setTextColor(p.textDim, p.bg);
     spr.setCursor(4, H - 12);
     spr.print("sent...");
+  } else if (tama.promptAlert) {
+    // Host decides (alert mode) — the device buttons don't approve here.
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(4, H - 12);
+    spr.print(strcmp(tama.promptKind, "question") == 0 ? "-> answer in editor"
+                                                        : "-> approve in editor");
   } else {
     spr.setTextColor(GREEN, p.bg);
     spr.setCursor(4, H - 12);
@@ -1003,6 +1040,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  beepSeqTick();
   t++;
   uint32_t now = millis();
 
@@ -1042,10 +1080,8 @@ void loop() {
     if (tama.promptId[0]) {
       promptArrivedMs = millis();
       wake();
-      for (int i = 0; i < 3; i++) {   // triple chirp so the alert is hard to miss
-        beep(1200, 90);
-        delay(140);                   // tone is async; space them so they're distinct
-      }
+      // The beep is driven by the host's {"cmd":"beep"} so it matches the alert
+      // type (approve / question); no fixed chirp here.
       // Jump to the approval screen no matter what was open — drawApproval
       // only runs from drawHUD which only runs in DISP_NORMAL.
       displayMode = DISP_NORMAL;
@@ -1095,14 +1131,16 @@ void loop() {
   if (M5.BtnA.wasReleased()) {
     if (!btnALong && !swallowBtnA) {
       if (inPrompt) {
-        char cmd[96];
-        snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"once\"}", tama.promptId);
-        sendCmd(cmd);
-        responseSent = true;
-        uint32_t tookS = (millis() - promptArrivedMs) / 1000;
-        statsOnApproval(tookS);
-        beep(2400, 60);
-        if (tookS < 5) triggerOneShot(P_HEART, 2000);
+        if (!tama.promptAlert) {   // alert mode: host decides; buttons are inert
+          char cmd[96];
+          snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"once\"}", tama.promptId);
+          sendCmd(cmd);
+          responseSent = true;
+          uint32_t tookS = (millis() - promptArrivedMs) / 1000;
+          statsOnApproval(tookS);
+          beep(2400, 60);
+          if (tookS < 5) triggerOneShot(P_HEART, 2000);
+        }
       } else if (resetOpen) {
         beep(1800, 30);
         resetSel = (resetSel + 1) % RESET_N;
@@ -1128,12 +1166,14 @@ void loop() {
     if (swallowBtnB) { swallowBtnB = false; }
     else
     if (inPrompt) {
-      char cmd[96];
-      snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"deny\"}", tama.promptId);
-      sendCmd(cmd);
-      responseSent = true;
-      statsOnDenial();
-      beep(600, 60);
+      if (!tama.promptAlert) {   // alert mode: host decides; buttons are inert
+        char cmd[96];
+        snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"deny\"}", tama.promptId);
+        sendCmd(cmd);
+        responseSent = true;
+        statsOnDenial();
+        beep(600, 60);
+      }
     } else if (resetOpen) {
       beep(2400, 30);
       applyReset(resetSel);

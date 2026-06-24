@@ -68,6 +68,7 @@ def new_state():
         "pending": {},
         "approvals": {},       # uid -> asyncio.Future, resolved by the device button
         "active_prompt": None,  # {"id","tool","hint"} currently shown on the device
+        "beep_queue": [],       # alert names to chime on the device: approve/question/complete
         "connected": False,
         "loop": None,
         "lock": asyncio.Lock(),
@@ -78,6 +79,13 @@ def new_state():
 def clear_pending(state, sid):
     for uid in [u for u, p in state["pending"].items() if p["sid"] == sid]:
         state["pending"].pop(uid, None)
+
+
+def _clear_active_prompt(state, uid=None, sid=None):
+    ap = state.get("active_prompt")
+    if ap and ((uid is not None and ap.get("id") == uid)
+               or (sid is not None and ap.get("sid") == sid)):
+        state["active_prompt"] = None
 
 
 def apply_event(state, ev):
@@ -92,6 +100,7 @@ def apply_event(state, ev):
     elif name == "SessionEnd":
         S.pop(sid, None)
         clear_pending(state, sid)
+        _clear_active_prompt(state, sid=sid)
     elif name == "UserPromptSubmit":
         s = S.setdefault(sid, {})
         s["busy"] = True
@@ -108,6 +117,8 @@ def apply_event(state, ev):
                 "tool": ev.get("tool", ""),
                 "hint": ev.get("hint", ""),
                 "ts": now,
+                "kind": ev.get("kind", "approve"),
+                "alert": bool(ev.get("alert")),  # alert mode → chime+screen when it waits
             }
     elif name == "PostToolUse":
         s = S.setdefault(sid, {})
@@ -116,12 +127,16 @@ def apply_event(state, ev):
         uid = ev.get("uid")
         if uid:
             state["pending"].pop(uid, None)
+        _clear_active_prompt(state, uid=uid)  # tool ran → drop the alert screen
     elif name == "Stop":
         # Turn finished — back to idle.
         s = S.setdefault(sid, {})
         s["busy"] = False
         s["last"] = now
         clear_pending(state, sid)
+        _clear_active_prompt(state, sid=sid)
+        if ev.get("beep"):
+            state["beep_queue"].append(ev["beep"])  # e.g. "complete"
     elif name == "SubagentStop":
         # A subagent finished but the main turn is still running — stay busy.
         s = S.setdefault(sid, {})
@@ -147,6 +162,10 @@ def compute_snapshot(state):
     for uid in [u for u, p in state["pending"].items()
                 if now - p["ts"] > CFG["pending_ttl"]]:
         state["pending"].pop(uid, None)
+    # alert-mode prompt is non-blocking, so time it out if nothing clears it
+    ap = state.get("active_prompt")
+    if ap and ap.get("alert") and now - ap.get("ts", now) > CFG.get("approve_timeout", 300.0):
+        state["active_prompt"] = None
     for s in S.values():
         if s.get("busy") and now - s.get("last", 0) > CFG["idle_timeout"]:
             s["busy"] = False
@@ -156,6 +175,23 @@ def compute_snapshot(state):
     waiters = [p for p in state["pending"].values()
                if now - p["ts"] >= CFG["approve_wait"]]
     waiting = len({p["sid"] for p in waiters})
+
+    # A tool that's still pending after approve_wait is genuinely waiting (for
+    # approval, or for a question answer) — chime once and show it on the device.
+    # Auto-approved tools clear before this, so they stay silent.
+    for uid, p in state["pending"].items():
+        # Questions always wait for you → alert immediately. Approvals wait
+        # approve_wait to tell a real prompt from an auto-approved tool.
+        threshold = 0.0 if p.get("kind") == "question" else CFG["approve_wait"]
+        if p.get("alert") and not p.get("alerted") and now - p["ts"] >= threshold:
+            p["alerted"] = True
+            state["beep_queue"].append("question" if p.get("kind") == "question" else "approve")
+            if not state.get("active_prompt"):
+                state["active_prompt"] = {
+                    "id": uid, "sid": p["sid"], "tool": p.get("tool", ""),
+                    "hint": p.get("hint", ""), "ts": now, "alert": True,
+                    "kind": p.get("kind", "approve"),
+                }
 
     if waiters:
         tool = waiters[0].get("tool")
@@ -174,6 +210,10 @@ def compute_snapshot(state):
     ap = state.get("active_prompt")
     if ap:
         snap["prompt"] = {"id": ap["id"], "tool": ap.get("tool", ""), "hint": ap.get("hint", "")}
+        if ap.get("alert"):
+            snap["prompt"]["alert"] = True  # device hides A/B; host decides
+        if ap.get("kind"):
+            snap["prompt"]["kind"] = ap["kind"]
         snap["waiting"] = max(snap["waiting"], 1)
         if not snap["msg"]:
             snap["msg"] = ("approve: " + ap.get("tool", "")).strip().rstrip(":")
@@ -292,7 +332,13 @@ async def ble_loop(state):
                         await write_line(client, snap)
                         last_sig = sig
                         last_keep = now
-                    await asyncio.sleep(0.5)
+                    # drain queued alert chimes (approve / question / complete)
+                    if state["beep_queue"]:
+                        async with state["lock"]:
+                            beeps, state["beep_queue"] = state["beep_queue"], []
+                        for name in beeps:
+                            await write_line(client, {"cmd": "beep", "name": name})
+                    await asyncio.sleep(0.1)   # snappy: chimes/snapshots within ~0.1s
             log("disconnected")
         except Exception as e:  # noqa: BLE001 — keep the daemon alive
             log(f"ble error: {e!r}")
@@ -317,8 +363,10 @@ async def _do_approval(state, ev):
         s["busy"] = True
         s["last"] = time.monotonic()
         state["active_prompt"] = {
-            "id": uid, "tool": ev.get("tool", ""), "hint": ev.get("hint", ""),
+            "id": uid, "sid": sid, "tool": ev.get("tool", ""), "hint": ev.get("hint", ""),
+            "kind": "approve",
         }
+        state["beep_queue"].append("approve")
     log(f"approve? uid={uid[:12]} tool={ev.get('tool')} → asking device")
     fut = state["loop"].create_future()
     state["approvals"][uid] = fut

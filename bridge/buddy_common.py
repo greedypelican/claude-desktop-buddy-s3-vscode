@@ -29,7 +29,7 @@ DEFAULTS = {
     # Seconds a PreToolUse may sit without its PostToolUse before we treat the
     # tool as blocked on the approval prompt → attention. The Pre→Post gap is
     # how we detect "waiting for approval" without the Notification hook.
-    "approve_wait": 1.5,
+    "approve_wait": 0.0,
     # Resend the snapshot at least this often even if nothing changed, so the
     # firmware's ~30s dead-link timeout never trips.
     "keepalive": 10.0,
@@ -42,12 +42,14 @@ DEFAULTS = {
     # Pending approval entries older than this are assumed resolved (a *denied*
     # tool never emits PostToolUse, so it would otherwise stick on attention).
     "pending_ttl": 180.0,
-    # Button approval (opt-in). When true, a PreToolUse for a gated tool is
-    # routed to the device: the buddy shows the prompt and A=approve / B=deny
-    # returns the decision to Claude Code. Off = display-only (approve in VS
-    # Code). If the device is disconnected/busy or doesn't answer within
-    # approve_timeout, it falls back to the normal VS Code prompt — never hangs.
-    "button_approval": False,
+    # Button approval mode for gated PreToolUse tools (opt-in):
+    #   false   → display-only (device mirrors state; you approve in VS Code)
+    #   "alert" → device shows the prompt + triple beep, but VS Code still
+    #             decides (non-blocking; the device A/B don't decide here)
+    #   true    → device decides: A=approve / B=deny returns to Claude Code,
+    #             blocking until a press or approve_timeout (then VS Code prompt).
+    #             VS Code shows no prompt in this mode (the hook answers first).
+    "button_approval": "alert",
     "button_approval_tools": ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"],
     # How long the device waits for an A/B press before falling back to the VS
     # Code prompt. NOTE: the PreToolUse hook's own `timeout` in settings.json

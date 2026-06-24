@@ -19,6 +19,8 @@ struct TamaState {
   char     promptId[40];     // pending permission request ID; empty = no prompt
   char     promptTool[20];
   char     promptHint[44];
+  bool     promptAlert;      // alert-only (host decides) — hide A/B, ignore buttons
+  char     promptKind[12];   // "approve" | "question" — alert label
 };
 
 // ---------------------------------------------------------------------------
@@ -78,9 +80,24 @@ static uint32_t _swBaseMs    = 0;   // millis() at last sync
 inline bool   swClockValid() { return _swValid; }
 inline time_t swClockNow()   { return _swBaseLocal + (time_t)((uint32_t)(millis() - _swBaseMs) / 1000u); }
 
+// Defined in main.cpp — plays a named alert beep pattern on the speaker.
+void buddyRequestBeep(const char* name);
+
 static void _applyJson(const char* line, TamaState* out) {
   JsonDocument doc;
   if (deserializeJson(doc, line)) return;
+
+  // Host alert beep: {"cmd":"beep","name":"approve|question|complete"}.
+  // MUST come before xferCommand(): when no transfer is active it swallows any
+  // unknown cmd (returns true for everything except "permission"), which would
+  // otherwise eat this before buddyRequestBeep is ever called.
+  const char* _beepCmd = doc["cmd"];
+  if (_beepCmd && !strcmp(_beepCmd, "beep")) {
+    buddyRequestBeep(doc["name"]);
+    _lastLiveMs = millis();
+    return;
+  }
+
   if (xferCommand(doc)) { _lastLiveMs = millis(); return; }
 
   // Bridge sends {"time":[epoch_sec, tz_offset_sec]}; gmtime_r on the
@@ -133,8 +150,12 @@ static void _applyJson(const char* line, TamaState* out) {
     strncpy(out->promptId,   pid ? pid : "", sizeof(out->promptId)-1);   out->promptId[sizeof(out->promptId)-1]=0;
     strncpy(out->promptTool, pt  ? pt  : "", sizeof(out->promptTool)-1); out->promptTool[sizeof(out->promptTool)-1]=0;
     strncpy(out->promptHint, ph  ? ph  : "", sizeof(out->promptHint)-1); out->promptHint[sizeof(out->promptHint)-1]=0;
+    out->promptAlert = pr["alert"] | false;
+    const char* pk = pr["kind"];
+    strncpy(out->promptKind, pk ? pk : "approve", sizeof(out->promptKind)-1); out->promptKind[sizeof(out->promptKind)-1]=0;
   } else {
     out->promptId[0] = 0; out->promptTool[0] = 0; out->promptHint[0] = 0;
+    out->promptAlert = false; out->promptKind[0] = 0;
   }
   out->lastUpdated = millis();
   _lastLiveMs = millis();
