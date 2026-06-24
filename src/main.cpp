@@ -1042,7 +1042,10 @@ void loop() {
     if (tama.promptId[0]) {
       promptArrivedMs = millis();
       wake();
-      beep(1200, 80);   // alert chirp
+      for (int i = 0; i < 3; i++) {   // triple chirp so the alert is hard to miss
+        beep(1200, 90);
+        delay(140);                   // tone is async; space them so they're distinct
+      }
       // Jump to the approval screen no matter what was open — drawApproval
       // only runs from drawHUD which only runs in DISP_NORMAL.
       displayMode = DISP_NORMAL;
