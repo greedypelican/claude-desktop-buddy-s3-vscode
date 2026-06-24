@@ -1,7 +1,7 @@
 # claude-desktop-buddy-s3-vscode
 
 > A desk buddy that reacts to **Claude Code in the VS Code extension** — not
-> just the desktop app. An M5StickC Plus S3 (ESP32-S3) shows your session
+> just the desktop app. An M5StickS3 (ESP32-S3) shows your session
 > activity and lights up when a permission prompt is waiting.
 
 The official [anthropics/claude-desktop-buddy](https://github.com/anthropics/claude-desktop-buddy)
@@ -22,7 +22,7 @@ Built on [openalchemy/claude-desktop-buddy-s3](https://github.com/openalchemy/cl
 
 ## What you need
 
-- **M5StickC Plus S3** (ESP32-S3)
+- **M5StickS3** (ESP32-S3)
 - **macOS** (Linux works too with extra pairing setup — see [bridge/NOTES.md](bridge/NOTES.md); Windows is not supported yet)
 - **[PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/)** — to flash the firmware
 - **Python 3** — for the bridge
