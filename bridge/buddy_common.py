@@ -35,9 +35,10 @@ DEFAULTS = {
     "keepalive": 10.0,
     # The firmware only shows the "busy" (sweating) animation at
     # sessionsRunning >= 3 (see NOTES.md); a single active session reads as
-    # idle. Set true to report running=3 whenever ANY session is generating, so
-    # the buddy looks awake while you work. Off = faithful to the desktop app.
-    "busy_boost": False,
+    # idle. On by default: report running=3 whenever ANY session is generating,
+    # so the buddy looks awake while you work. Set false to be faithful to the
+    # desktop app (a single session then reads as idle).
+    "busy_boost": True,
     # Pending approval entries older than this are assumed resolved (a *denied*
     # tool never emits PostToolUse, so it would otherwise stick on attention).
     "pending_ttl": 180.0,

@@ -105,12 +105,13 @@ device.
 Optional `~/.claude-buddy/config.json`:
 
 ```json
-{ "owner": "Felix", "busy_boost": true }
+{ "owner": "Felix" }
 ```
 
 - `owner` — name shown on the device.
-- `busy_boost` — the firmware only shows the "busy" animation at 3+ concurrent
-  sessions; set `true` so a single active session looks busy too.
+- `busy_boost` — **on by default**: makes a single active session show as busy
+  (the firmware's own "busy" needs 3+ concurrent sessions). Set `false` for
+  desktop-app-faithful behavior.
 - Others: `name_prefix`, `idle_timeout`, `approve_wait` (see
   [bridge/buddy_common.py](bridge/buddy_common.py)). Env `CLAUDE_BUDDY_OWNER` /
   `CLAUDE_BUDDY_NAME` override.
