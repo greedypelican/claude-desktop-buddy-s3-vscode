@@ -41,6 +41,14 @@ DEFAULTS = {
     # Pending approval entries older than this are assumed resolved (a *denied*
     # tool never emits PostToolUse, so it would otherwise stick on attention).
     "pending_ttl": 180.0,
+    # Button approval (opt-in). When true, a PreToolUse for a gated tool is
+    # routed to the device: the buddy shows the prompt and A=approve / B=deny
+    # returns the decision to Claude Code. Off = display-only (approve in VS
+    # Code). If the device is disconnected/busy or doesn't answer within
+    # approve_timeout, it falls back to the normal VS Code prompt — never hangs.
+    "button_approval": False,
+    "button_approval_tools": ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"],
+    "approve_timeout": 30.0,
 }
 
 

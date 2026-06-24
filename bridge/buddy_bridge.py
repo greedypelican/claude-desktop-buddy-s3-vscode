@@ -57,8 +57,22 @@ def log(msg):
 # approval prompt → attention. Cleared on its PostToolUse, on Stop / new prompt
 # for the session, or after pending_ttl (a denied tool never emits PostToolUse).
 # ---------------------------------------------------------------------------
+# Module-global handle so the BLE notify callback (which bleak calls without our
+# state arg) can resolve pending approvals. Set once in main().
+STATE = None
+
+
 def new_state():
-    return {"sessions": {}, "pending": {}, "lock": asyncio.Lock(), "stop": False}
+    return {
+        "sessions": {},
+        "pending": {},
+        "approvals": {},       # uid -> asyncio.Future, resolved by the device button
+        "active_prompt": None,  # {"id","tool","hint"} currently shown on the device
+        "connected": False,
+        "loop": None,
+        "lock": asyncio.Lock(),
+        "stop": False,
+    }
 
 
 def clear_pending(state, sid):
@@ -154,7 +168,16 @@ def compute_snapshot(state):
     # Firmware shows "busy" only at running >= 3; optionally make a single
     # active session look busy too (waiting still takes priority on-device).
     wire_running = 3 if (CFG.get("busy_boost") and running >= 1) else running
-    return {"total": total, "running": wire_running, "waiting": waiting, "msg": msg}
+    snap = {"total": total, "running": wire_running, "waiting": waiting, "msg": msg}
+
+    # Button approval in flight → drive the device's approval screen.
+    ap = state.get("active_prompt")
+    if ap:
+        snap["prompt"] = {"id": ap["id"], "tool": ap.get("tool", ""), "hint": ap.get("hint", "")}
+        snap["waiting"] = max(snap["waiting"], 1)
+        if not snap["msg"]:
+            snap["msg"] = ("approve: " + ap.get("tool", "")).strip().rstrip(":")
+    return snap
 
 
 # ---------------------------------------------------------------------------
@@ -163,16 +186,49 @@ def compute_snapshot(state):
 _rx_accum = bytearray()
 
 
+def _resolve_approval(uid, decision):
+    """Device button answered — hand the decision to the waiting hook."""
+    if not STATE or not uid:
+        return
+    loop = STATE.get("loop")
+    fut = STATE["approvals"].get(uid)
+    if fut is not None and loop is not None:
+        loop.call_soon_threadsafe(
+            lambda: fut.done() or fut.set_result(decision)
+        )
+    ap = STATE.get("active_prompt")
+    if ap and ap.get("id") == uid:
+        STATE["active_prompt"] = None
+
+
+def fail_pending_approvals(state):
+    """Link dropped — release any blocked hooks to the VS Code prompt."""
+    for fut in list(state["approvals"].values()):
+        if not fut.done():
+            fut.set_result("ask")
+    state["approvals"].clear()
+    state["active_prompt"] = None
+
+
 def on_notify(_sender, data):
-    """Device → central. Acks today; permission replies once buttons land."""
+    """Device → central. Permission replies (button presses) + acks."""
     _rx_accum.extend(data)
     while b"\n" in _rx_accum:
         line, _, rest = _rx_accum.partition(b"\n")
         del _rx_accum[:]
         _rx_accum.extend(rest)
         text = line.decode("utf-8", "replace").strip()
-        if text:
-            log(f"dev→ {text[:120]}")
+        if not text:
+            continue
+        log(f"dev→ {text[:120]}")
+        try:
+            msg = json.loads(text)
+        except Exception:
+            continue
+        if msg.get("cmd") == "permission":
+            # firmware: "once" = approve, "deny" = deny
+            decision = "allow" if msg.get("decision") == "once" else "deny"
+            _resolve_approval(msg.get("id"), decision)
 
 
 async def write_line(client, obj):
@@ -215,6 +271,7 @@ async def ble_loop(state):
                 if CFG["owner"]:
                     await write_line(client, {"cmd": "owner", "name": CFG["owner"]})
                 log("link up; mirroring session state")
+                state["connected"] = True
 
                 conn_t = time.monotonic()
                 last_sig = None
@@ -239,19 +296,68 @@ async def ble_loop(state):
             log("disconnected")
         except Exception as e:  # noqa: BLE001 — keep the daemon alive
             log(f"ble error: {e!r}")
+        finally:
+            state["connected"] = False
+            fail_pending_approvals(state)
         await asyncio.sleep(3)
 
 
 # ---------------------------------------------------------------------------
 # Hook-event socket server
 # ---------------------------------------------------------------------------
+async def _do_approval(state, ev):
+    """Show the prompt on the device and wait for A/B. Returns allow|deny|ask."""
+    uid = ev.get("uid")
+    # Can't gate on the device right now → defer to the VS Code prompt.
+    if not uid or not state.get("connected") or state.get("active_prompt"):
+        return "ask"
+    sid = ev.get("session_id") or "default"
+    async with state["lock"]:
+        s = state["sessions"].setdefault(sid, {})
+        s["busy"] = True
+        s["last"] = time.monotonic()
+        state["active_prompt"] = {
+            "id": uid, "tool": ev.get("tool", ""), "hint": ev.get("hint", ""),
+        }
+    log(f"approve? uid={uid[:12]} tool={ev.get('tool')} → asking device")
+    fut = state["loop"].create_future()
+    state["approvals"][uid] = fut
+    try:
+        decision = await asyncio.wait_for(fut, timeout=CFG.get("approve_timeout", 30.0))
+    except asyncio.TimeoutError:
+        decision = "ask"
+    finally:
+        state["approvals"].pop(uid, None)
+        ap = state.get("active_prompt")
+        if ap and ap.get("id") == uid:
+            state["active_prompt"] = None
+    log(f"approve uid={uid[:12]} → {decision}")
+    return decision
+
+
 async def handle_conn(reader, writer, state):
     try:
         data = await reader.read(1 << 16)
-        for raw in data.splitlines():
-            raw = raw.strip()
-            if not raw:
-                continue
+        lines = [l.strip() for l in data.splitlines() if l.strip()]
+        if not lines:
+            return
+        try:
+            first = json.loads(lines[0])
+        except Exception:
+            first = None
+
+        # Blocking approval request: answer on the same connection.
+        if first and first.get("approve_req"):
+            decision = await _do_approval(state, first)
+            try:
+                writer.write((json.dumps({"decision": decision}) + "\n").encode())
+                await writer.drain()
+            except Exception:
+                pass
+            return
+
+        # Otherwise: fire-and-forget state events.
+        for raw in lines:
             try:
                 ev = json.loads(raw)
             except Exception:
@@ -260,7 +366,10 @@ async def handle_conn(reader, writer, state):
                 apply_event(state, ev)
             log(f"hook {ev.get('event')} sid={str(ev.get('session_id'))[:8]}")
     finally:
-        writer.close()
+        try:
+            writer.close()
+        except Exception:
+            pass
 
 
 async def serve(state):
@@ -300,7 +409,10 @@ async def main():
     except OSError:
         pass
 
+    global STATE
     state = new_state()
+    state["loop"] = asyncio.get_running_loop()
+    STATE = state  # so the BLE notify callback can resolve approvals
     log(f"bridge starting (name_prefix='{CFG['name_prefix']}', sock={bc.SOCK_PATH})")
     try:
         await asyncio.gather(ble_loop(state), serve(state))

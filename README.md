@@ -95,9 +95,10 @@ Work in Claude Code as usual. The buddy follows along.
 | **attention** (LED, `!`) | a tool is waiting for your approval             |
 
 Approval is detected from the gap between a tool starting and finishing —
-because the VS Code extension does **not** fire the `Notification` hook. You
-still approve in VS Code; the buddy is the visual alert. (Device-button approval
-is planned — see [bridge/NOTES.md](bridge/NOTES.md).)
+because the VS Code extension does **not** fire the `Notification` hook. By
+default you still approve in VS Code and the buddy is just the visual alert; turn
+on **[Button approval](#button-approval-optional)** to approve/deny right on the
+device.
 
 ## Configure
 
@@ -116,6 +117,27 @@ Optional `~/.claude-buddy/config.json`:
 
 **Restart the bridge** after changing config (`pkill -f buddy_bridge.py`, or
 Ctrl+C the foreground run and re-launch).
+
+## Button approval (optional)
+
+Approve or deny tool calls **on the device** — A = approve, B = deny — instead of
+in VS Code. Off by default. Enable in `~/.claude-buddy/config.json`:
+
+```json
+{ "button_approval": true }
+```
+
+Takes effect on the next tool call (no restart needed). When on, each gated tool
+shows an approval screen on the buddy and **blocks** until you press A/B. If the
+device is disconnected, busy with another prompt, or you don't press within 30 s,
+it falls back to the normal VS Code prompt — it never hangs.
+
+- `button_approval_tools` — which tools are gated (default
+  `["Bash","Write","Edit","MultiEdit","NotebookEdit"]`; reads etc. pass through).
+- `approve_timeout` — seconds to wait for a button before falling back (default 30).
+
+Heads-up: every gated tool waits for a press — that's the point, but it's why
+it's opt-in.
 
 ## Use it in every project
 
@@ -192,9 +214,9 @@ Wipe a previously-flashed device first if needed: `pio run -t erase && pio run -
 
 The screen auto-powers-off after 30 s of no interaction (kept on during an approval). Any button press wakes it.
 
-> Note: A/B approve/deny act on the **device's own** prompt flow. Returning that
-> decision to the *VS Code extension* is the planned button-approval feature and
-> is not wired yet — today the bridge is display-only.
+> Note: the **approve / deny** columns drive the real permission decision in the
+> VS Code extension only when [Button approval](#button-approval-optional) is
+> enabled. With it off (default), the bridge is display-only.
 
 ### Pets
 

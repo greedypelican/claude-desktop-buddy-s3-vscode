@@ -136,19 +136,33 @@ One central at a time: disconnect the desktop Hardware Buddy before using this.
   needs bleak, in `bridge/.venv`. The hook auto-spawns the daemon from that venv.
 - Targets macOS + Linux (AF_UNIX). Windows is future work (different IPC + pairing).
 
-## FUTURE — button approval (A=approve / B=deny on the device)
+## Button approval (A=approve / B=deny on the device)
 
-Deliberately seamed in, not built yet (MVP is display-only):
+Implemented and verified end-to-end in the VS Code extension (2026-06-24).
+Opt-in via config `button_approval: true`; off → display-only.
 
-- Daemon already subscribes to the device TX channel (`on_notify`) and the wire
-  protocol defines `{"cmd":"permission","id":...,"decision":"once"|"deny"}`.
-- Plan: a `buddy_hook.py --approve` mode on **PreToolUse** that keeps the socket
-  open, asks the daemon to push the prompt + await a button, then prints Claude
-  Code's `hookSpecificOutput.permissionDecision` (allow/deny) to stdout.
-- OPEN RISK: a PreToolUse hook returning a decision must actually gate the tool
-  in the extension. Unconfirmed — the extension owns its permission webview, so
-  this may only work in the CLI. Test before committing to it. Display-only
-  attention already delivers the original goal (visual alert instead of sound).
+First confirmed the feasibility: a PreToolUse hook that prints
+`hookSpecificOutput.permissionDecision: "deny"` really does block the tool in the
+extension — so this works despite the extension rendering its own permission
+webview.
+
+Flow for a gated PreToolUse:
+1. `buddy_hook.py` opens the socket, sends `{…,"approve_req":true}`, and BLOCKS.
+2. The daemon sets `active_prompt`, so the next snapshot carries
+   `prompt:{id,tool,hint}` → the firmware shows its approval screen.
+3. A → `{"cmd":"permission","id":…,"decision":"once"}`, B → `"deny"` (over BLE;
+   the firmware already does this, main.cpp ~1096/1129).
+4. `on_notify` resolves the waiting future; the daemon replies `{"decision":…}`.
+5. The hook prints `permissionDecision` allow/deny; the extension honors it.
+
+Never deadlocks: device disconnected / another prompt already in flight / no
+press within `approve_timeout` (30s) → daemon replies `"ask"`, the hook prints
+nothing, and the normal VS Code prompt takes over. Only `button_approval_tools`
+(default Bash/Write/Edit/MultiEdit/NotebookEdit) are gated; other tools pass
+through. One prompt at a time (the firmware shows one).
+
+Trade-off: with it on, EVERY gated tool waits for a button press — that's the
+full "pet approves your work" experience, but it's why it's opt-in.
 
 ## File map
 

@@ -86,8 +86,61 @@ def spawn_daemon():
         pass
 
 
+def request_approval(ev, cfg):
+    """Block on the device for a decision. Returns "allow" | "deny" | "ask".
+
+    "ask" means defer to the normal VS Code permission prompt — returned when the
+    device is disconnected/busy, the daemon is down, or it times out, so Claude
+    Code never deadlocks waiting on a button.
+    """
+    timeout = float(cfg.get("approve_timeout", 30.0)) + 5.0
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(bc.SOCK_PATH)
+        req = dict(ev)
+        req["approve_req"] = True
+        s.sendall((json.dumps(req) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        decision = json.loads(buf.split(b"\n", 1)[0].decode()).get("decision", "ask")
+        return decision if decision in ("allow", "deny", "ask") else "ask"
+    except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError, ValueError):
+        spawn_daemon()  # bring it up for next time; defer this one
+        return "ask"
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def emit_decision(decision):
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision,
+        "permissionDecisionReason": "buddy: " + ("approved" if decision == "allow" else "denied") + " on device",
+    }}))
+
+
 def main():
     ev = build_event(read_hook())
+    cfg = bc.load_config()
+
+    # Button approval: route a gated PreToolUse to the device and block for A/B.
+    if (ev.get("event") == "PreToolUse" and cfg.get("button_approval")
+            and ev.get("tool") in set(cfg.get("button_approval_tools") or [])):
+        decision = request_approval(ev, cfg)
+        if decision in ("allow", "deny"):
+            emit_decision(decision)
+        # "ask" → emit nothing → fall through to the normal VS Code prompt
+        sys.exit(0)
+
+    # Display-only path: fire-and-forget event report.
     try:
         send(ev)
     except (FileNotFoundError, ConnectionRefusedError, socket.timeout, OSError):
