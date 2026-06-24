@@ -67,6 +67,17 @@ inline const char* dataScenarioName() {
 static bool _rtcValid = false;
 inline bool dataRtcValid() { return _rtcValid; }
 
+// Software wall-clock. On this board M5.Rtc never holds a valid time (the clock
+// reads garbage even via the desktop app — likely no/undetected RTC chip), so
+// we keep time in software from the bridge's time sync + millis(). The bridge
+// resends time periodically, so it stays accurate and the millis() wrap (~49d)
+// never matters.
+static bool     _swValid     = false;
+static time_t   _swBaseLocal = 0;   // local epoch captured at last sync
+static uint32_t _swBaseMs    = 0;   // millis() at last sync
+inline bool   swClockValid() { return _swValid; }
+inline time_t swClockNow()   { return _swBaseLocal + (time_t)((uint32_t)(millis() - _swBaseMs) / 1000u); }
+
 static void _applyJson(const char* line, TamaState* out) {
   JsonDocument doc;
   if (deserializeJson(doc, line)) return;
@@ -77,6 +88,7 @@ static void _applyJson(const char* line, TamaState* out) {
   JsonArray t = doc["time"];
   if (!t.isNull() && t.size() == 2) {
     time_t local = (time_t)t[0].as<uint32_t>() + (int32_t)t[1];
+    _swBaseLocal = local; _swBaseMs = millis(); _swValid = true;
     struct tm lt; gmtime_r(&local, &lt);
     RTC_TimeTypeDef tm;
     tm.hours = (uint8_t)lt.tm_hour; tm.minutes = (uint8_t)lt.tm_min; tm.seconds = (uint8_t)lt.tm_sec;

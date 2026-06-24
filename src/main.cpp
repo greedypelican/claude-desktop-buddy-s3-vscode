@@ -357,8 +357,22 @@ static void clockRefreshRtc() {
   if (millis() - _clkLastRead < 1000) return;
   _clkLastRead = millis();
   _onUsb = compat::vbusVoltageV() > 4.0f;
-  M5.Rtc.getTime(&_clkTm);
-  M5.Rtc.getDate(&_clkDt);
+  // Prefer the software clock — this board's hardware RTC reads garbage. Falls
+  // back to M5.Rtc until the first bridge time sync arrives.
+  if (swClockValid()) {
+    time_t now = swClockNow();
+    struct tm lt; gmtime_r(&now, &lt);
+    _clkTm.hours   = (uint8_t)lt.tm_hour;
+    _clkTm.minutes = (uint8_t)lt.tm_min;
+    _clkTm.seconds = (uint8_t)lt.tm_sec;
+    _clkDt.year    = (uint16_t)(lt.tm_year + 1900);
+    _clkDt.month   = (uint8_t)(lt.tm_mon + 1);
+    _clkDt.date    = (uint8_t)lt.tm_mday;
+    _clkDt.weekDay = (uint8_t)lt.tm_wday;
+  } else {
+    M5.Rtc.getTime(&_clkTm);
+    M5.Rtc.getDate(&_clkDt);
+  }
 }
 
 static void clockUpdateOrient() {
