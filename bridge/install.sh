@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One-shot setup for the Claude Code → buddy bridge.
-# Idempotent: safe to re-run. Creates the venv, installs bleak, and prepares
-# the runtime dir. The repo's project hooks (.claude/settings.json) are already
-# committed, so after this you only need to restart Claude Code.
+# Idempotent: safe to re-run. Creates the venv, installs bleak, prepares the
+# runtime dir, and wires the hooks GLOBALLY (~/.claude/settings.json) so the
+# buddy reacts to Claude Code in every project — not just this repo.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -25,23 +25,24 @@ mkdir -p "$HOME/.claude-buddy"
 ./.venv/bin/python -c "import buddy_bridge" >/dev/null
 echo "[buddy] daemon imports OK."
 
+# Wire hooks into the user settings (all projects). Absolute path to this clone.
+"$PY" wire_hooks.py user
+
 cat <<'EOF'
 
-[buddy] setup complete.
+[buddy] setup complete. Hooks are installed globally (all projects).
 
-  1. Restart Claude Code (VS Code) so the project hooks load + are trusted.
+  1. Restart Claude Code (VS Code) so the hooks load + are trusted.
   2. Wake the stick and make sure the desktop app's Hardware Buddy is
      DISCONNECTED — BLE allows only one central at a time.
   3. First connect pops a macOS pairing dialog: enter the 6-digit passkey
      shown on the stick. Reconnects reuse the stored key.
 
-Optional:
-  • Drive the buddy from EVERY project on this machine:
-        python3 wire_hooks.py user        (undo: --remove)
-  • Set your display name / scan filter:
-        echo '{"owner":"YOURNAME"}' > ~/.claude-buddy/config.json
-  • Watch the bridge:
-        tail -f ~/.claude-buddy/bridge.log
-  • Run it in the foreground for first-time pairing:
-        ./.venv/bin/python buddy_bridge.py --foreground
+Notes:
+  • The global hooks point at THIS folder's buddy_hook.py — keep the repo here
+    (or re-run this script after moving it). Undo: python3 wire_hooks.py user --remove
+  • Repo-only instead of global: python3 wire_hooks.py project
+  • Set your display name:  echo '{"owner":"YOURNAME"}' > ~/.claude-buddy/config.json
+  • Watch the bridge:       tail -f ~/.claude-buddy/bridge.log
+  • Foreground (pairing):   ./.venv/bin/python buddy_bridge.py --foreground
 EOF

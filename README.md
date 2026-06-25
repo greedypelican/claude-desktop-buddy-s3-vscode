@@ -55,9 +55,11 @@ cd bridge
 ./install.sh
 ```
 
-Creates a local Python venv, installs `bleak`, and prepares `~/.claude-buddy/`.
-The hooks are already wired in [`.claude/settings.json`](.claude/settings.json)
-(portable — they use `$CLAUDE_PROJECT_DIR`).
+Creates a local Python venv, installs `bleak`, prepares `~/.claude-buddy/`, and
+wires the hooks **globally** (`~/.claude/settings.json`) so the buddy reacts to
+Claude Code in **every project**, not just this repo. The global hooks point at
+this folder's `buddy_hook.py`, so keep the repo where it is (or re-run
+`./install.sh` after moving it).
 
 ### 3. Restart Claude Code
 
@@ -163,16 +165,21 @@ VS Code prompt — it never hangs. If you raise `approve_timeout` past ~355, als
 bump the PreToolUse hook `timeout` in settings.json (Claude Code kills hooks at
 60s by default; ours is set to 360).
 
-## Use it in every project
+## Hook scope
 
-The committed hooks only fire while Claude Code's project is *this* repo. To
-drive the buddy from all your Claude Code work on this machine:
+`./install.sh` wires the hooks **globally** (`~/.claude/settings.json`) — the
+buddy reacts in every project. To change that:
 
 ```bash
 cd bridge
-python3 wire_hooks.py user          # merge hooks into ~/.claude/settings.json
-python3 wire_hooks.py user --remove   # undo
+python3 wire_hooks.py user --remove   # uninstall the global hooks
+python3 wire_hooks.py project         # repo-only instead (this repo's .claude/settings.json)
+python3 wire_hooks.py user            # re-install global
 ```
+
+The global hooks store an absolute path to this clone's `buddy_hook.py`; if you
+move the repo, re-run `./install.sh` (or `wire_hooks.py user`). Don't enable both
+global and repo-only at once, or events fire twice in this repo.
 
 ## Troubleshooting
 

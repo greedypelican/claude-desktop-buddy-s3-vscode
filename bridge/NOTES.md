@@ -127,9 +127,12 @@ One central at a time: disconnect the desktop Hardware Buddy before using this.
 
 ## Portability decisions (runs/install on any machine)
 
-- No hardcoded paths. Scripts resolve themselves from `__file__`; project hooks
-  use `$CLAUDE_PROJECT_DIR`; `wire_hooks.py user` computes an absolute path at
-  install time on each machine.
+- No hardcoded paths. Scripts resolve themselves from `__file__`. `install.sh`
+  wires hooks **globally** by default (`wire_hooks.py user` → an absolute path to
+  this clone, computed per machine) so the buddy works in every project. A
+  `project` mode (repo-only, via `$CLAUDE_PROJECT_DIR`) exists too — don't enable
+  both at once or events double-fire in this repo. No committed project
+  `.claude/settings.json` (it would double-fire alongside a global install).
 - Runtime state in `~/.claude-buddy/` (socket, log, optional `config.json`) —
   per-user, deterministic, short enough for an AF_UNIX path on macOS.
 - Hook client is stdlib-only (no venv needed to *report* events); only the daemon
