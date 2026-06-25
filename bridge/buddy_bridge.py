@@ -69,6 +69,7 @@ def new_state():
         "approvals": {},       # uid -> asyncio.Future, resolved by the device button
         "active_prompt": None,  # {"id","tool","hint"} currently shown on the device
         "beep_queue": [],       # alert names to chime on the device: approve/question/complete
+        "deferred_beep": None,  # (name, due_monotonic) — a beep to send after a delay
         "connected": False,
         "loop": None,
         "lock": asyncio.Lock(),
@@ -136,7 +137,8 @@ def apply_event(state, ev):
         clear_pending(state, sid)
         _clear_active_prompt(state, sid=sid)
         if ev.get("beep"):
-            state["beep_queue"].append(ev["beep"])  # e.g. "complete"
+            # delay it like the others (0.3s) so all chimes are consistent
+            state["deferred_beep"] = (ev["beep"], now + CFG["approve_wait"])  # e.g. "complete"
     elif name == "SubagentStop":
         # A subagent finished but the main turn is still running — stay busy.
         s = S.setdefault(sid, {})
@@ -166,6 +168,12 @@ def compute_snapshot(state):
     ap = state.get("active_prompt")
     if ap and ap.get("alert") and now - ap.get("ts", now) > CFG.get("approve_timeout", 300.0):
         state["active_prompt"] = None
+
+    # release a deferred beep (e.g. "complete") once its delay has elapsed
+    db = state.get("deferred_beep")
+    if db and now >= db[1]:
+        state["beep_queue"].append(db[0])
+        state["deferred_beep"] = None
     for s in S.values():
         if s.get("busy") and now - s.get("last", 0) > CFG["idle_timeout"]:
             s["busy"] = False
@@ -180,10 +188,10 @@ def compute_snapshot(state):
     # approval, or for a question answer) — chime once and show it on the device.
     # Auto-approved tools clear before this, so they stay silent.
     for uid, p in state["pending"].items():
-        # Questions always wait for you → alert immediately. Approvals wait
-        # approve_wait to tell a real prompt from an auto-approved tool.
-        threshold = 0.0 if p.get("kind") == "question" else CFG["approve_wait"]
-        if p.get("alert") and not p.get("alerted") and now - p["ts"] >= threshold:
+        # Wait approve_wait before chiming: for approvals it tells a real prompt
+        # from an auto-approved tool (cleared by PostToolUse); for questions it's
+        # just a small delay (they never finish that fast).
+        if p.get("alert") and not p.get("alerted") and now - p["ts"] >= CFG["approve_wait"]:
             p["alerted"] = True
             state["beep_queue"].append("question" if p.get("kind") == "question" else "approve")
             if not state.get("active_prompt"):

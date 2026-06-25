@@ -29,7 +29,7 @@ DEFAULTS = {
     # Seconds a PreToolUse may sit without its PostToolUse before we treat the
     # tool as blocked on the approval prompt → attention. The Pre→Post gap is
     # how we detect "waiting for approval" without the Notification hook.
-    "approve_wait": 0.0,
+    "approve_wait": 0.2,
     # Resend the snapshot at least this often even if nothing changed, so the
     # firmware's ~30s dead-link timeout never trips.
     "keepalive": 10.0,

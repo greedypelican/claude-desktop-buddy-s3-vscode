@@ -55,7 +55,7 @@ hook. So "waiting for approval" can't be read from Notification.
 ## How we detect attention without Notification
 
 The **Pre→Post timing gap.** A `PreToolUse(tool_use_id)` with no matching
-`PostToolUse(same id)` after `approve_wait` (1.5s) means the tool is blocked on
+`PostToolUse(same id)` after `approve_wait` (default 0.2s) means the tool is blocked on
 the approval webview → **attention**. `PostToolUse(id)` clears it → back to busy.
 `tool_use_id` pairs Pre↔Post exactly. Bonus over Notification: we know the tool
 name + command, so the device can show *what* is waiting.
@@ -70,7 +70,7 @@ also cleared on the session's next prompt/Stop and force-expired after
 SessionStart                              → idle    (connected)
 UserPromptSubmit / Pre / PostToolUse      → busy    (stays busy for the WHOLE turn)
 SubagentStop                              → busy    (subagent done, main turn continues)
-PreToolUse without PostToolUse > 1.5s     → attention (waiting > 0, LED blinks)
+PreToolUse without PostToolUse > approve_wait → attention (waiting > 0, LED blinks)
 Stop                                      → idle    (turn ended — the normal idle trigger)
 no events > idle_timeout (600s/10min)     → idle    (SAFETY NET only, if a Stop is missed)
 SessionEnd (last session gone)            → sleep   (total == 0)
@@ -205,9 +205,11 @@ are float (exact pitches); BPM is onset-to-onset (`60000/bpm` ms); `vol` sets th
 master volume (0-255) and persists to later button beeps. To retune, edit
 `buddyRequestBeep()` in main.cpp and reflash.
 
-Latency: question + complete fire immediately; approve waits `approve_wait`
-(default 0 → instant, chimes even on auto-approved tools; raise to filter them).
-The daemon loop ticks at 0.1s.
+Latency: all three wait `approve_wait` (default 0.2s) before chiming — for
+approve/question it's the pending→promote threshold, for complete it's a deferred
+send. For approve the window also filters auto-approved tools (cleared by
+PostToolUse before it elapses); `0` = chime instantly, higher filters slower
+auto-approved tools too. The daemon loop ticks at 0.1s.
 
 **FIRMWARE GOTCHA:** the beep handler in `data.h` `_applyJson` MUST come *before*
 `xferCommand()` — xferCommand returns true for ANY unknown cmd when no transfer

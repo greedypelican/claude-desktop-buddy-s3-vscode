@@ -114,7 +114,7 @@ default below). The daemon reads it at **startup**, so after editing, restart it
   "owner": "Felix",
   "busy_boost": true,
   "button_approval": "alert",
-  "approve_wait": 0
+  "approve_wait": 0.2
 }
 ```
 
@@ -125,7 +125,7 @@ default below). The daemon reads it at **startup**, so after editing, restart it
 | `busy_boost` | `true` | Show a single active session as **busy** (the firmware's own "busy" needs 3+ concurrent sessions). `false` = desktop-app-faithful. |
 | `button_approval` | `"alert"` | `false` = display-only; `"alert"` = device chimes + shows the prompt, you decide in VS Code; `true` = device A/B decides. See [Button approval](#button-approval-optional). |
 | `button_approval_tools` | `["Bash","Write","Edit","MultiEdit","NotebookEdit"]` | Which tools trigger an approval alert/gate. |
-| `approve_wait` | `0` | Seconds to wait before an **approve** chime, to tell a genuine approval from an auto-approved tool. `0` = chime instantly on every gated tool (more false chimes); raise (e.g. `0.5`) to chime only when a tool actually waits. Questions always chime instantly. |
+| `approve_wait` | `0.2` | Seconds every alert waits before chiming. For **approve** it doubles as a filter: a gated tool that finishes within the window (auto-approved) stays silent. `0` = chime instantly on every gated tool; raise it to also filter slower auto-approved tools. |
 | `approve_timeout` | `300` | `true` mode only: seconds to wait for an A/B press before falling back to the VS Code prompt. |
 | `idle_timeout` | `600` | Safety net: drop a stuck "busy" back to idle after this many quiet seconds (Stop normally handles it). |
 
@@ -153,11 +153,12 @@ Set by `button_approval` in `~/.claude-buddy/config.json`:
 
 Only tools in `button_approval_tools` are involved (default
 `["Bash","Write","Edit","MultiEdit","NotebookEdit"]`; reads etc. pass through).
-With the default `approve_wait` of `0`, a gated tool chimes the **approve** sound
-immediately — even ones VS Code auto-approves; raise `approve_wait` (e.g. `0.5`)
-to chime only when a tool genuinely waits. Questions always chime instantly.
-Switching `button_approval` takes effect on the next tool call; `approve_wait`
-and the other daemon settings need a daemon restart.
+With the default `approve_wait` of `0.2`, every alert waits 0.2s before chiming;
+for **approve** that window also filters auto-approved tools (ones that finish
+within it stay silent). Set `0` to chime instantly on every gated tool, or higher
+to filter slower auto-approved tools too. Switching `button_approval` takes effect
+on the next tool call; `approve_wait` and other daemon settings need a daemon
+restart.
 
 For **`true`** mode specifically: if the device is disconnected/busy or you don't
 press within `approve_timeout` (default 300 = 5 min), it falls back to the normal
